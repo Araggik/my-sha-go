@@ -4,6 +4,7 @@ package hogwarts
 
 
 //Test
+//Test2
 func GetCourseList(prereqs map[string][]string) []string {
 	var result = []string{}
 
