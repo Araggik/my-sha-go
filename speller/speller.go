@@ -103,13 +103,20 @@ func Spell(n int64) string {
 
 	var deriveNumber int64 = 1000000000
 
+	isPlaceNumberWord := false
+
 	for i := 1; i <= 4; i++ {
-		treeDigitNumber := int(n / deriveNumber)
+		treeDigitNumber := int(x / deriveNumber)
 
 		if treeDigitNumber > 0 {
 			s := receiveStrForTreeDigit(treeDigitNumber)
 
-			b.WriteRune(' ')
+			if isPlaceNumberWord {
+				b.WriteRune(' ')
+			}
+
+			isPlaceNumberWord = true
+			
 			b.WriteString(s)
 
 			if i != 4 {
