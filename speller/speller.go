@@ -11,16 +11,16 @@ var placeNumberMap = map[int]string{
 }
 
 var twentyMap = map[int]string{
-	0: "zero",
-	1: "one",
-	2: "two",
-	3: "three",
-	4: "four",
-	5: "five",
-	6: "six",
-	7: "seven",
-	8: "eight",
-	9: "nine",
+	0:  "zero",
+	1:  "one",
+	2:  "two",
+	3:  "three",
+	4:  "four",
+	5:  "five",
+	6:  "six",
+	7:  "seven",
+	8:  "eight",
+	9:  "nine",
 	10: "ten",
 	11: "eleven",
 	12: "twelve",
@@ -44,10 +44,10 @@ var dozenMap = map[int]string{
 	9: "ninety",
 }
 
-func receiveStrForTreeDigit(treeDigitNumber int) string{
+func receiveStrForTreeDigit(treeDigitNumber int) string {
 	var b strings.Builder
 
-	isHundred := treeDigitNumber > 100
+	isHundred := treeDigitNumber >= 100
 
 	if isHundred {
 		hundred := treeDigitNumber / 100
@@ -59,7 +59,7 @@ func receiveStrForTreeDigit(treeDigitNumber int) string{
 
 	twoDigit := treeDigitNumber % 100
 
-	if twoDigit > 0{
+	if twoDigit > 0 {
 		if isHundred {
 			b.WriteRune(' ')
 		}
@@ -116,18 +116,18 @@ func Spell(n int64) string {
 			}
 
 			isPlaceNumberWord = true
-			
+
 			b.WriteString(s)
 
 			if i != 4 {
 				b.WriteRune(' ')
 				b.WriteString(placeNumberMap[i])
-	
+
 				x -= int64(treeDigitNumber) * deriveNumber
-			}	
+			}
 		}
 
-		deriveNumber /= 1000	
+		deriveNumber /= 1000
 	}
 
 	return b.String()

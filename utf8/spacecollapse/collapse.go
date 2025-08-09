@@ -28,5 +28,9 @@ func CollapseSpaces(input string) string {
 		}
 	}
 
+	if isSpaceChars {
+		b.WriteRune(spaceChar)
+	}
+
 	return b.String()
 }
