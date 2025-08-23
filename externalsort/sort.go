@@ -4,6 +4,7 @@ package externalsort
 
 import (
 	"container/heap"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -45,7 +46,7 @@ func (b *BaseLineReader) ReadLine() (string, error) {
 		if i == l {
 			b.buf = b.buf[:0]
 		} else {
-			b.buf = b.buf[:i+1]
+			b.buf = b.buf[i:]
 		}
 	}
 
@@ -55,7 +56,8 @@ func (b *BaseLineReader) ReadLine() (string, error) {
 		for !hasStr && err == nil {
 			n, e := b.r.Read(buf)
 
-			if e == nil {
+			//При считывании из io.Reader может верунться io.EOF и последние байты
+			if e == nil || (e == io.EOF && n > 0) {
 				j := 0
 
 				for ; j < n && !hasStr; j++ {
@@ -68,8 +70,15 @@ func (b *BaseLineReader) ReadLine() (string, error) {
 
 				//Если есть строка, то дописываемся оставшиеся байты в буфер
 				if hasStr {
-					b.buf = buf[j:]
+					b.buf = buf[j:n]
 				}
+
+				//Считали все из io.Reader
+				if e == io.EOF {
+					hasStr = true
+				}
+			} else if !hasStr && e == io.EOF && builder.Len() > 0 {
+				hasStr = true
 			} else {
 				err = e
 			}
@@ -137,30 +146,52 @@ func (h *StrHeap) Pop() any {
 	return x
 }
 
-// Sort
-type FileLines struct {
-	lines []string
-	index int
-}
+func sortFile(fileName string) error {
+	var err error
 
-func (fl *FileLines) ReadFile(lr LineReader) {
-	for line, e := lr.ReadLine(); len(line) > 0 && e == nil; line, e = lr.ReadLine() {
-		fl.lines = append(fl.lines, line)
+	//Открытие файла
+	f, e := os.Open(fileName)
+
+	if e != nil {
+		return e
 	}
-}
 
-func (fl *FileLines) ReadLine() (string, error) {
 	var s string
-	var e error
 
-	if fl.index > len(fl.lines) {
-		e = io.EOF
-	} else {
-		s = fl.lines[fl.index]
-		fl.index++
+	h := &StrHeap{}
+	heap.Init(h)
+
+	//Заполнение кучи
+	r := NewReader(f)
+
+	for s, e = r.ReadLine(); e == nil; s, e = r.ReadLine() {
+		heap.Push(h, StrHeapElem{readerIndex: 0, str: s})
 	}
 
-	return s, e
+	if e == io.EOF && len(s) > 0 {
+		heap.Push(h, StrHeapElem{readerIndex: 0, str: s})
+	}
+
+	f.Close()
+
+	//Запись в файл сортированных строк
+	writeFile, e := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+
+	if e == nil {
+		defer writeFile.Close()
+
+		lw := NewWriter(writeFile)
+
+		for h.Len() > 0 && err == nil {
+			el := heap.Pop(h).(StrHeapElem)
+
+			err = lw.Write(el.str)
+		}
+	} else {
+		err = e
+	}
+
+	return err
 }
 
 func NewReader(r io.Reader) LineReader {
@@ -171,38 +202,6 @@ func NewReader(r io.Reader) LineReader {
 
 func NewWriter(w io.Writer) LineWriter {
 	return BaseLineWriter{w: w}
-}
-
-func sortFile(fileName string) error {
-	var err error
-
-	f, e := os.Open(fileName)
-
-	if e != nil {
-		return e
-	}
-
-	fl := &FileLines{lines: nil, index: 0}
-
-	r := NewReader(f)
-
-	fl.ReadFile(r)
-
-	f.Close()
-
-	writeFile, e := os.OpenFile(f.Name(), os.O_TRUNC, os.ModePerm)
-
-	if e == nil {
-		defer writeFile.Close()
-
-		for s, e := fl.ReadLine(); e == nil && err == nil; s, e = fl.ReadLine() {
-			_, err = writeFile.WriteString(s)
-		}
-	} else {
-		err = e
-	}
-
-	return err
 }
 
 func Merge(w LineWriter, readers ...LineReader) error {
@@ -242,14 +241,33 @@ func Merge(w LineWriter, readers ...LineReader) error {
 func Sort(w io.Writer, in ...string) error {
 	var err error
 
+	fmt.Println("sort")
+
 	filesCount := len(in)
 
 	//Сортируем строки внутри файлов
 	for i := 0; i < filesCount && err == nil; i++ {
-		e := sortFile(in[i])
+		err = sortFile(in[i])
+	}
 
-		if e != nil {
-			err = e
+	if err == nil {
+		var readers []LineReader
+
+		//Создаем readers
+		for i := 0; i < filesCount && err == nil; i++ {
+			if file, e := os.Open(in[i]); e == nil {
+				defer file.Close()
+
+				readers = append(readers, NewReader(file))
+			} else {
+				err = e
+			}
+		}
+
+		if err == nil {
+			lw := NewWriter(w)
+
+			err = Merge(lw, readers...)
 		}
 	}
 
