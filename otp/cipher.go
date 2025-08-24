@@ -12,52 +12,33 @@ type CipherReader struct {
 }
 
 func (cr *CipherReader) Read(p []byte) (n int, e error) {
-	rP := make([]byte, len(p))
+	l := len(p)
 
-	_, rE := cr.r.Read(rP)
+	rP := make([]byte, l)
 
-	if rE == nil {
-		prngN, prngE := cr.prng.Read(rP)
+	rN, rE := cr.r.Read(rP)
 
-		if prngE == nil {
-			n = prngN
+	if rE == nil || (rE == io.EOF && rN > 0) {
+		prngP := make([]byte, rN)
 
-			p = p[:0]
+		prngN, prngE := cr.prng.Read(prngP)
 
-			_ = append(p, rP[:prngN]...)
+		if prngE == nil || (prngE == io.EOF && prngN > 0) {
+			n = rN
 
-			//fmt.Println(rN, prngN)
-		} else {
-			e = prngE
+			for i := range rN {
+				p[i] = prngP[i] ^ rP[i]
+			}
 		}
 
-	} else {
-		e = rE
+		if prngE != nil {
+			e = prngE
+		}
 	}
 
-	// //Читаем из r
-	// if rN, rE := cr.r.Read(rP); rE == nil {
-	// 	prngP := make([]byte, len(rP))
-
-	// 	//Если расшифровали меньше, то дорасшифровываем
-	// 	for prngN := 0; prngN < rN; {
-	// 		nextN, _ := cr.prng.Read(prngP)
-
-	// 		//Проверить, что [] вызываются раньше ...
-	// 		rP = append(rP, prngP[:nextN]...)
-
-	// 		prngN += nextN
-	// 	}
-
-	// 	//Возвращение n
-	// 	n = rN
-
-	// 	p = p[:0]
-
-	// 	p = append(p, rP...)
-	// } else {
-	// 	e = rE
-	// }
+	if e == nil && rE != nil {
+		e = rE
+	}
 
 	return
 }
@@ -68,33 +49,20 @@ type CipherWriter struct {
 }
 
 func (cw *CipherWriter) Write(p []byte) (n int, e error) {
-	var copyP []byte
+	l := len(p)
 
-	copyP = append(copyP, p...)
+	prngP := make([]byte, l)
 
-	l := len(copyP)
+	prngN, prngE := cw.prng.Read(prngP)
 
-	//Шифруем в copyP
-	for i := 0; i < l; {
-		nextN, _ := cw.prng.Read(copyP[i:l])
+	if prngE == nil || (prngE == io.EOF && prngN > 0) {
+		var wP []byte
 
-		i += nextN
-	}
-
-	//Пишем в w
-	for i := 0; i < l && e == nil; {
-		nextN, err := cw.w.Write(copyP[i:l])
-
-		if err == nil {
-			i += nextN
-		} else {
-			e = err
+		for i := range prngN {
+			wP = append(wP, prngP[i]^p[i])
 		}
-	}
 
-	if e == nil {
-		//Возвращение n
-		n = l
+		n, e = cw.w.Write(wP)
 	}
 
 	return
