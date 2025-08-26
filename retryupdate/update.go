@@ -16,44 +16,78 @@ var conflictErr *kvapi.ConflictError
 func UpdateValue(c kvapi.Client, key string, updateFn func(oldValue *string) (newValue string, err error)) error {
 	var resultErr error
 
-	isRetry := true
+	isGetRetry := true
 
 	getReq := &kvapi.GetRequest{Key: key}
 
-	for isRetry {
+	for isGetRetry {
 		getRes, err := c.Get(getReq)
 
 		resultErr = err
 
-		if resultErr == nil {
-			newVal, err := updateFn(&getRes.Value)
+		isKeyNoFound := errors.Is(resultErr, kvapi.ErrKeyNotFound)
 
-			resultErr = err
+		if resultErr == nil || isKeyNoFound {
+			isSetRetry := true
 
-			if resultErr == nil {
-				setReg := &kvapi.SetRequest{
-					Key:        key,
-					Value:      newVal,
-					OldVersion: getRes.Version,
-					NewVersion: uuid.Must(uuid.NewV4()),
+			var prevVersion *uuid.UUID
+
+			for isSetRetry {
+				var value *string
+				var oldVersion uuid.UUID
+				newVersion := uuid.Must(uuid.NewV4())
+
+				if !isKeyNoFound {
+					value = &getRes.Value
+					oldVersion = getRes.Version
 				}
 
-				_, err := c.Set(setReg)
+				newVal, err := updateFn(value)
 
 				resultErr = err
 
-				if errors.As(resultErr, &authErr) {
-					isRetry = false
+				if resultErr == nil {
+					setReg := &kvapi.SetRequest{
+						Key:        key,
+						Value:      newVal,
+						OldVersion: oldVersion,
+						NewVersion: newVersion,
+					}
+
+					_, err := c.Set(setReg)
+
+					resultErr = err
+
+					if resultErr == nil || errors.As(resultErr, &authErr) {
+						isSetRetry = false
+						isGetRetry = false
+					} else if errors.As(resultErr, &conflictErr) {
+						var a any = errors.Unwrap(err)
+
+						originErr := a.(*kvapi.ConflictError)
+
+						if originErr.ExpectedVersion == *prevVersion {
+							isGetRetry = false
+							resultErr = nil
+						}
+
+						isSetRetry = false
+					} else if errors.Is(resultErr, kvapi.ErrKeyNotFound) {
+						isKeyNoFound = true
+					}
+
+					prevVersion = &newVersion
+				} else {
+					isGetRetry = false
+					isSetRetry = false
 				}
-			} else {
-				isRetry = false
 			}
 		} else if errors.As(err, &authErr) {
-			isRetry = false
+			isGetRetry = false
 		}
 
 		if resultErr == nil {
-			isRetry = false
+			isGetRetry = false
 		}
 	}
 
