@@ -3,16 +3,16 @@
 package ciletters
 
 import (
-	"text/template"
 	"strings"
-)
+	"text/template"
 
-import _ "embed"
+	_ "embed"
+)
 
 //go:embed template.txt
 var fileStr string
 
-func parseLog(log string) string[] {
+func parseLog(log string) []string {
 	lines := strings.Split(log, "\n")
 
 	var lineIndex int
@@ -20,9 +20,9 @@ func parseLog(log string) string[] {
 	l := len(lines)
 
 	if l > 10 {
-		lineIndex := l - 10
+		lineIndex = l - 10
 	} else {
-		lineIndex := 0
+		lineIndex = 0
 	}
 
 	return lines[lineIndex:]
@@ -33,7 +33,7 @@ func MakeLetter(n *Notification) (string, error) {
 	var s string
 
 	funcMap := template.FuncMap{
-		"parselog": parseLog
+		"parselog": parseLog,
 	}
 
 	tmpl, err := template.New("letter").Funcs(funcMap).Parse(fileStr)
@@ -41,7 +41,7 @@ func MakeLetter(n *Notification) (string, error) {
 	if err == nil {
 		var b strings.Builder
 
-		err = tmpl.Execute(b, n)
+		err = tmpl.Execute(&b, n)
 
 		if err == nil {
 			s = b.String()
