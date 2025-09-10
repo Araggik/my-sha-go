@@ -17,11 +17,17 @@ type Locker interface {
 // when calling the Wait method.
 type Cond struct {
 	L Locker
+	chList []chan struct{}
+	lCh chan struct{}
 }
 
 // New returns a new Cond with Locker l.
 func New(l Locker) *Cond {
-	return &Cond{L: l}
+	return &Cond{
+		L: l,
+		chList: nil,
+		lCh: make(chan struct{}, 1)
+	}
 }
 
 // Wait atomically unlocks c.L and suspends execution
@@ -41,7 +47,19 @@ func New(l Locker) *Cond {
 //    c.L.Unlock()
 //
 func (c *Cond) Wait() {
+	c.L.Unlock()
 
+	c.lCh <- struct{}{}
+
+	ch = make(chan struct{})
+
+	c.chList = append(c.chList, ch)
+
+	<- c.lCh
+
+	<- ch
+
+	c.L.Lock()
 }
 
 // Signal wakes one goroutine waiting on c, if there is any.
@@ -49,7 +67,19 @@ func (c *Cond) Wait() {
 // It is allowed but not required for the caller to hold c.L
 // during the call.
 func (c *Cond) Signal() {
+	c.lCh <- struct{}{}
 
+	ch = c.chList[0]
+
+	ch <- struct{}{}
+
+	if len(c.chList) == 1 {
+		c.chList = nil
+	} else {
+		c.chList = c.chLsit[1:]
+	}
+
+	<- c.lCh
 }
 
 // Broadcast wakes all goroutines waiting on c.
@@ -57,5 +87,13 @@ func (c *Cond) Signal() {
 // It is allowed but not required for the caller to hold c.L
 // during the call.
 func (c *Cond) Broadcast() {
+	c.lCh <- struct{}{}
 
+	for _, v := range c.chList {
+		ch <- struct{}
+	}
+
+	c.chList = nil
+
+	<- c.lCh
 }
