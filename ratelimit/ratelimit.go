@@ -10,6 +10,13 @@ import (
 
 // Limiter is precise rate limiter with context support.
 type Limiter struct {
+	ticker: time.Ticker
+	maxCount: int
+	count: int
+	ch: chan struct{}
+	stopCh: chan struct{}
+	countCh: chan struct{}
+	isStop: boolean
 }
 
 var ErrStopped = errors.New("limiter stopped")
@@ -17,13 +24,77 @@ var ErrStopped = errors.New("limiter stopped")
 // NewLimiter returns limiter that throttles rate of successful Acquire() calls
 // to maxSize events at any given interval.
 func NewLimiter(maxCount int, interval time.Duration) *Limiter {
-	panic("not implemented")
+	l := &Limiter{
+		ticker: time.NewTicker(interval),
+		maxCount: maxCount,
+		count: 0,
+		countCh: make(chan struct{}, 1),
+		ch: make(chan struct{}, maxCount),
+		stopCh: make(chan struct{}),
+		isStop: false
+	}
+
+	go l.process()
 }
 
 func (l *Limiter) Acquire(ctx context.Context) error {
-	panic("not implemented")
+	if l.isStop {
+		return ErrStopped
+	} else {
+		doneCh := ctx.Done()
+
+		l.countCh <- struct{}{}
+
+		l.count++
+
+		<- l.countCh
+	
+		select {
+		case <- doneCh:
+			l.countCh <- struct{}{}
+
+			l.count--
+
+			<- l.countCh
+
+			return ctx.Err()
+		case l.ch <- struct{}{}:
+			return nil 
+		}
+	}
 }
 
 func (l *Limiter) Stop() {
-	panic("not implemented")
+	l.isStop = true
+
+    l.stopCh <- struct{}{}
+
+	l.ticker.Stop()
+}
+
+func (l *Limiter) process() {
+	select {
+	  case <- l.stopCh:
+		return
+	  case <- l.ticker.C:
+		var acquireCount int 
+
+		l.countCh <- struct{}{}
+
+		if maxCount < l.count {
+			acquireCount = maxCount
+
+			l.count -= maxCount
+		} else {
+			acquireCount = l.count
+
+			l.count = 0
+		}
+
+		<- l.countCh
+
+		for i := range acquireCount {
+			<- l.ch
+		}
+	}
 }
