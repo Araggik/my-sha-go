@@ -16,17 +16,17 @@ type Locker interface {
 // which must be held when changing the condition and
 // when calling the Wait method.
 type Cond struct {
-	L Locker
+	L      Locker
 	chList []chan struct{}
-	lCh chan struct{}
+	lCh    chan struct{}
 }
 
 // New returns a new Cond with Locker l.
 func New(l Locker) *Cond {
 	return &Cond{
-		L: l,
+		L:      l,
 		chList: nil,
-		lCh: make(chan struct{}, 1)
+		lCh:    make(chan struct{}, 1),
 	}
 }
 
@@ -47,17 +47,17 @@ func New(l Locker) *Cond {
 //    c.L.Unlock()
 //
 func (c *Cond) Wait() {
-	c.L.Unlock()
-
 	c.lCh <- struct{}{}
 
-	ch = make(chan struct{})
+	ch := make(chan struct{}, 1)
 
 	c.chList = append(c.chList, ch)
 
-	<- c.lCh
+	<-c.lCh
 
-	<- ch
+	c.L.Unlock()
+
+	<-ch
 
 	c.L.Lock()
 }
@@ -69,17 +69,19 @@ func (c *Cond) Wait() {
 func (c *Cond) Signal() {
 	c.lCh <- struct{}{}
 
-	ch = c.chList[0]
+	if c.chList != nil {
+		ch := c.chList[0]
 
-	ch <- struct{}{}
+		ch <- struct{}{}
 
-	if len(c.chList) == 1 {
-		c.chList = nil
-	} else {
-		c.chList = c.chLsit[1:]
+		if len(c.chList) == 1 {
+			c.chList = nil
+		} else {
+			c.chList = c.chList[1:]
+		}
 	}
 
-	<- c.lCh
+	<-c.lCh
 }
 
 // Broadcast wakes all goroutines waiting on c.
@@ -90,10 +92,10 @@ func (c *Cond) Broadcast() {
 	c.lCh <- struct{}{}
 
 	for _, v := range c.chList {
-		ch <- struct{}
+		v <- struct{}{}
 	}
 
 	c.chList = nil
 
-	<- c.lCh
+	<-c.lCh
 }
