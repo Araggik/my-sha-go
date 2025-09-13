@@ -8,20 +8,22 @@ package waitgroup
 // runs and calls Done when finished. At the same time,
 // Wait can be used to block until all goroutines have finished.
 type WaitGroup struct {
-	wCh chan struct{}
-	cCh chan struct{}
+	wCh   chan struct{}
+	cCh   chan struct{}
 	count int
 }
 
 // New creates WaitGroup.
 func New() *WaitGroup {
-	wg = &WaitGroup{
-		wCh: make(chan struct{})
-		cCh: make(chan struct{}, 1)
-		count: 0
+	wg := &WaitGroup{
+		wCh:   make(chan struct{}, 1),
+		cCh:   make(chan struct{}, 1),
+		count: 0,
 	}
 
-	return nil
+	wg.wCh <- struct{}{}
+
+	return wg
 }
 
 // Add adds delta, which may be negative, to the WaitGroup counter.
@@ -40,14 +42,18 @@ func New() *WaitGroup {
 func (wg *WaitGroup) Add(delta int) {
 	wg.cCh <- struct{}{}
 
-	if count + delta >= 0 {
-		count += delta
+	if wg.count+delta >= 0 {
+		if wg.count == 0 {
+			<-wg.wCh
+		}
 
-		if count == 0 {
+		wg.count += delta
+
+		if wg.count == 0 {
 			wg.wCh <- struct{}{}
-		} 
+		}
 	} else {
-		panic()
+		panic("negative WaitGroup counter")
 	}
 
 	<-wg.cCh
@@ -57,14 +63,14 @@ func (wg *WaitGroup) Add(delta int) {
 func (wg *WaitGroup) Done() {
 	wg.cCh <- struct{}{}
 
-	if count - 1 >= 0 {
-		count--
+	if wg.count-1 >= 0 {
+		wg.count--
 
-		if count == 0 {
+		if wg.count == 0 {
 			wg.wCh <- struct{}{}
 		}
 	} else {
-		panic()
+		panic("negative WaitGroup counter")
 	}
 
 	<-wg.cCh
@@ -72,7 +78,7 @@ func (wg *WaitGroup) Done() {
 
 // Wait blocks until the WaitGroup counter is zero.
 func (wg *WaitGroup) Wait() {
-	if wg.count > 0 {
-		<- wg.wCh
-	}
+	<-wg.wCh
+
+	wg.wCh <- struct{}{}
 }
