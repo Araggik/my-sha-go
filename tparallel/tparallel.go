@@ -4,48 +4,91 @@ package tparallel
 
 type T struct {
 	parallelCount int
-	seqCh chan struct{}
-	parallelCh chan struct{}
+	seqCh         chan struct{}
+	parallelCh    chan struct{}
 }
 
 func (t *T) Parallel() {
 	t.parallelCount++
-	t.seqCh  <- struct{}{}
-	<- t.parallelCh
+
+	t.seqCh <- struct{}{}
+
+	<-t.parallelCh
 }
 
 func (t *T) Run(subtest func(t *T)) {
+	seqCh := make(chan struct{})
+
+	t.seqCh = seqCh
+
 	pCount := t.parallelCount
 
-	for _, f := subtest {
-		go func() {
-			defer func() {
-				t.seqCh  <- struct{}{}
-			}()
-			f(t)
-		}()
+	isParallel := true
 
-		<- t.seqCh
-	}
+	isReturn := false
+
+	go func() {
+		defer func() {
+			if !isReturn {
+				isParallel = false
+
+				seqCh <- struct{}{}
+			}
+		}()
+		subtest(t)
+	}()
+
+	<-seqCh
+
+	isReturn = true
 
 	parallelSubCount := t.parallelCount - pCount
 
-	if parallelSubCount > 0 {
-		for i := range parallelSubCount {
+	if !isParallel && parallelSubCount > 0 {
+		for range parallelSubCount {
 			t.parallelCh <- struct{}{}
 		}
 
-		for t.parallelCount != pCount {
-			<- t.seqCh
-			t.parallelCount--
-		}
+		t.parallelCount = pCount
+
+		//TODO: нужно подождать пока закончатся все пареллельные тесты прежде чем выйти
 	}
 }
 
 func Run(topTests []func(t *T)) {
 	t := &T{
-		seqCh: make(chan struct{})
+		parallelCh: make(chan struct{}),
 	}
 
-	t.Run(topTests)
+	topSeqCh := make(chan struct{})
+
+	t.seqCh = topSeqCh
+
+	pCount := 0
+
+	for _, f := range topTests {
+		go func() {
+			defer func() {
+				topSeqCh <- struct{}{}
+			}()
+			f(t)
+		}()
+
+		<-topSeqCh
+
+		t.seqCh = topSeqCh
+	}
+
+	parallelSubCount := t.parallelCount - pCount
+
+	if parallelSubCount > 0 {
+		for range parallelSubCount {
+			t.parallelCh <- struct{}{}
+		}
+
+		for t.parallelCount != pCount {
+			<-topSeqCh
+			t.parallelCount--
+		}
+	}
 }
