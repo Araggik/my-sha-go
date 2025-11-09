@@ -1,9 +1,9 @@
 package tabletest
 
 import (
+	"strconv"
 	"testing"
 	"time"
-	"strconv"
 )
 
 func TestParseDurationValid(t *testing.T) {
@@ -17,6 +17,7 @@ func TestParseDurationValid(t *testing.T) {
 	}{
 		{"0", 0},
 		{"-1.5h", time.Duration(-hour - 30*min)},
+		{"+1h30m", time.Duration(hour + 30*min)},
 	}
 
 	for _, v := range tests {
@@ -37,9 +38,12 @@ func TestParseDurationError(t *testing.T) {
 		"",
 		".",
 		"a",
+		"1a",
 		maxIntStr + "1",
 		//Переполнение int64 на единицу
 		maxIntStr[:len(maxIntStr)-1] + "8",
+		"1." + maxIntStr + "1",
+		"1." + maxIntStr[:len(maxIntStr)-1] + "8",
 	}
 
 	for _, v := range tests {
