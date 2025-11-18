@@ -3,11 +3,11 @@
 package tparallel
 
 type T struct {
-	parallelCount  int
+	parallelCount int
 	//Канал для последовательного исполнения: при запуске горутины мы ждем, когда она завершиться
-	seqCh          chan struct{}
+	seqCh chan struct{}
 	//Нужен, чтобы в t.Run() сделать присваивание t.prevParallelCh = t.parallelCh
-	parallelCh     chan struct{}
+	parallelCh chan struct{}
 	//Параллельные сабтесты ждут, пока не придет сигнал из родительского канала, чтобы запуститься
 	prevParallelCh chan struct{}
 	//Родительский тест ждет, пока не завершаться все дочерние параллеьные сабтесты
@@ -17,8 +17,10 @@ type T struct {
 func (t *T) Parallel() {
 	t.parallelCount++
 
+	//Выходим из текущего t.Run()
 	t.seqCh <- struct{}{}
 
+	//Ждем сигнала из родительского t.Run() параллельного канала
 	<-t.prevParallelCh
 }
 
@@ -70,10 +72,12 @@ func (t *T) Run(subtest func(t *T)) {
 	parallelSubCount := t.parallelCount - pCount
 
 	if !isParallel && parallelSubCount > 0 {
+		//Сигнал на запуск параллельных тестов
 		for range parallelSubCount {
 			parallelCh <- struct{}{}
 		}
 
+		//Ждем окончания параллельных тестов
 		for range parallelSubCount {
 			<-waitParallelCh
 		}
