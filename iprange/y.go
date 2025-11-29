@@ -491,6 +491,13 @@ ipdefault:
 		{
 			mask := net.CIDRMask(int(ipDollar[3].num), 32)
 			min := ipDollar[1].addrRange.Min.Mask(mask)
+
+			//Если вернуть не 0, то считается, что есть ошибка
+			if min == nil {
+				return 1
+			}
+
+			//TODO: ошибка в этой строке, если min == nil
 			maxInt := binary.BigEndian.Uint32([]byte(min)) +
 				0xffffffff -
 				binary.BigEndian.Uint32([]byte(mask))

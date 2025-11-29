@@ -1,109 +1,31 @@
 package iprange
 
 import (
-	"net"
-	"strconv"
-	"strings"
 	"testing"
 )
 
-func FuzzIpRange(t *testing.F) {
-
-}
-
-func TestIpRangePossibilities(t *testing.T) {
-	res, err := Parse("192.168.255.0/1")
-	t.Logf("res: %v, err: %v \n", res, err)
-}
-
-//Функция аналог Parse
-func TestingParse(address string) (AddressRange, error) {
-	var result AddressRange
-
-	numbers := strings.Split(address, ".")
-
-	if strings.Contains(numbers[3], "/") {
-		mask := strings.Split(numbers[3], "/")[1]
-
-		if mask == "24" {
-			part := toBytes(numbers[:3])
-
-			result.Min = net.IP(addBytes(part, []byte{0}))
-			result.Max = net.IP(addBytes(part, []byte{255}))
-		} else if mask == "16" {
-			part := toBytes(numbers[:2])
-
-			result.Min = net.IP(addBytes(part, []byte{0, 0}))
-			result.Max = net.IP(addBytes(part, []byte{255, 255}))
-		} else if mask == "8" {
-			part := toBytes(numbers[:1])
-
-			result.Min = net.IP(addBytes(part, []byte{0, 0, 0}))
-			result.Max = net.IP(addBytes(part, []byte{255, 255, 255}))
-		} else {
-			//Проверить что min правильный
-			result.Min = net.IP([]byte{128, 0, 0, 0})
-			result.Max = net.IP([]byte{255, 255, 255, 255})
-		}
-
-	} else if strings.Contains(numbers[3], "*") {
-		if numbers[0] == "*" {
-			//Проверить что min правильный
-			result.Min = net.IP([]byte{0, 0, 0, 0})
-			result.Max = net.IP([]byte{255, 255, 255, 255})
-		} else if numbers[1] == "*" {
-			part := toBytes(numbers[:1])
-
-			result.Min = net.IP(addBytes(part, []byte{0, 0, 0}))
-			result.Max = net.IP(addBytes(part, []byte{255, 255, 255}))
-		} else if numbers[2] == "*" {
-			part := toBytes(numbers[:2])
-
-			result.Min = net.IP(addBytes(part, []byte{0, 0}))
-			result.Max = net.IP(addBytes(part, []byte{255, 255}))
-		} else {
-			part := toBytes(numbers[:3])
-
-			result.Min = net.IP(addBytes(part, []byte{0}))
-			result.Max = net.IP(addBytes(part, []byte{255}))
-		}
-	} else if strings.Contains(numbers[3], "-") {
-		//Получаем элементы после последнего "."
-		lastParts := strings.Split(numbers[3], "-")
-
-		lastNumberStr := lastParts[1]
-		lastNumber, _ := strconv.Atoi(lastNumberStr)
-		maxLastByte := byte(lastNumber % 256)
-
-		strBytes := make([]string, 4)
-		strBytes = append(numbers[:3], lastParts[0])
-
-		part := toBytes(numbers[:3])
-
-		result.Min = net.IP(toBytes(strBytes))
-		result.Max = net.IP(addBytes(part, []byte{maxLastByte}))
-	} else {
-		part := toBytes(numbers[:4])
-
-		result.Min = net.IP(part)
-		result.Max = net.IP(part)
+func FuzzIpRange(f *testing.F) {
+	testcases := []string{
+		"192.168.1.1",
+		"192.168.1.1/24",
+		"10.1.2.3/16",
+		"192.168.1.*",
+		"192.168.1.10-20",
+		"192.168.10-20.1",
+		"0-255.1.1.1",
+		"1-2.3-4.5-6.7-8",
+		"192.168.10-20.*/25",
+		//Тесты с ошибкой
+		"0",
+		"192.168.10",
+		"0.0.0.0/70",
 	}
 
-	return result, nil
-}
-
-func toBytes(slice []string) []byte {
-	res := make([]byte, len(slice))
-
-	for i, s := range slice {
-		num, _ := strconv.Atoi(s)
-
-		res[i] = byte(num)
+	for _, tc := range testcases {
+		f.Add(tc)
 	}
 
-	return res
-}
-
-func addBytes(slice []byte, add []byte) []byte {
-	return append(slice, add...)
+	f.Fuzz(func(t *testing.T, a string) {
+		_, _ = Parse(a)
+	})
 }
