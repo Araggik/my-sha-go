@@ -4,15 +4,17 @@ package dupcall
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
 type Call struct {
-	mu      sync.Mutex
-	cond    *sync.Cond
-	running bool
-	result  *ComputeResult
+	mu          sync.Mutex
+	cond        *sync.Cond
+	running     bool
+	result      *ComputeResult
+	condMu      sync.Mutex
+	waitDoCount int
+	isSignal    bool
 }
 
 type ComputeResult struct {
@@ -23,18 +25,38 @@ type ComputeResult struct {
 func (o *Call) Do(
 	ctx context.Context,
 	cb func(context.Context) (interface{}, error),
-) (result interface{}, err error) {
+) (interface{}, error) {
 	o.mu.Lock()
 
-	if running {
-		result = o.result
+	if o.cond == nil {
+		o.cond = sync.NewCond(&o.condMu)
+	}
+
+	if o.running {
+		result := o.result
+
+		o.waitDoCount++
+
 		o.mu.Unlock()
 
-		o.cond.Wait()
+		//Перед Wait нужно брать Lock()
+		//Когда посылается Signal, то либо происходит o.condMu.Lock(), либо происходит o.cond.Wait()
+		o.condMu.Lock()
+
+		if !o.isSignal {
+			o.cond.Wait()
+		}
+
+		o.isSignal = false
+
+		//После Wait нужно делать Unlock()
+		o.condMu.Unlock()
 
 		o.mu.Lock()
 
-		if running {
+		o.waitDoCount--
+
+		if o.running {
 			o.mu.Unlock()
 			return o.compute(ctx, cb)
 		} else {
@@ -65,7 +87,20 @@ func (o *Call) compute(
 
 	select {
 	case <-ctx.Done():
-		o.cond.Signal()
+		o.mu.Lock()
+
+		if o.waitDoCount == 0 {
+			o.running = false
+		} else {
+			o.condMu.Lock()
+			o.isSignal = true
+			o.condMu.Unlock()
+
+			o.cond.Signal()
+		}
+
+		o.mu.Unlock()
+
 		return nil, context.Cause(ctx)
 	case result := <-resChan:
 		o.mu.Lock()
@@ -74,10 +109,15 @@ func (o *Call) compute(
 		o.result.value = result.value
 		o.result.err = result.err
 
+		//Возможно стоит вставить:
+		// o.condMu.Lock()
+		// o.isSignal = true
+		// o.condMu.Unlock()
+
+		o.cond.Broadcast()
+
 		o.mu.Unlock()
 
-		o.sync.Broadcast()
 		return result.value, result.err
 	}
 }
-
