@@ -5,7 +5,7 @@ package keylock
 import "container/heap"
 
 type KeyLock struct {
-	chMap map[string]LockDataHeap
+	chMap map[string]*LockDataHeap
 	//Мютекс для работы с chMap
 	muCh chan struct{}
 	//Заблокированные ключи
@@ -13,11 +13,13 @@ type KeyLock struct {
 }
 
 func New() *KeyLock {
-	return &KeyLock{
-		chMap:      make(map[string]LockDataHeap),
-		mapCh:      make(chan struct{}, 1),
+	kl := &KeyLock{
+		chMap:      make(map[string]*LockDataHeap),
+		muCh:       make(chan struct{}, 1),
 		lockedKeys: make(map[string]struct{}),
 	}
+
+	return kl
 }
 
 func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool, unlock func()) {
@@ -32,25 +34,39 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 		_, ok := l.lockedKeys[keys[i]]
 
 		if ok {
-			isLocked := true
+			isLocked = true
 		}
 	}
 
 	if isLocked {
 		waitCh := make(chan struct{})
 
-		data := LockData{keys, waitCh}
+		data := LockData{keys: keys, waitCh: waitCh}
 
 		for _, key := range keys {
-			h := l.chMap[key]
+			h, ok := l.chMap[key]
+
+			if !ok {
+				h = &LockDataHeap{}
+
+				l.chMap[key] = h
+			}
 
 			heap.Push(h, data)
-
 		}
 
 		<-l.muCh
 
-		<-waitCh
+		select {
+		case <-waitCh:
+			unlock = func() {
+				l.unlockKeys(keys)
+			}
+		case <-cancel:
+			canceled = true
+			unlock = func() {}
+		}
+		close(waitCh)
 
 	} else {
 		for _, key := range keys {
@@ -58,13 +74,63 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 		}
 
 		<-l.muCh
+
+		unlock = func() {
+			l.unlockKeys(keys)
+		}
 	}
 
+	return
+}
+
+func (l *KeyLock) unlockKeys(keys []string) {
+	l.muCh <- struct{}{}
+
+	for _, key := range keys {
+		delete(l.lockedKeys, key)
+	}
+
+	//Нужен для поиска каналов, через которые возможно можно разблокировать горутины
+	unlockHeap := &LockDataHeap{}
+
+	for _, key := range keys {
+		h, ok := l.chMap[key]
+
+		if ok {
+			var data *LockData
+
+			//TODO: подумать над этим циклом, вроде бы нужно брать
+			//не первый элемент из кучи, а элемент с меньшим набором ключей, которые все свободны
+
+			for data == nil && h.Len() > 0 {
+				d := heap.Pop(h).(LockData)
+
+				select {
+				//Если канал закрыт, то берем следующий элемент из кучи
+				case <-d.waitCh:
+				default:
+					data = &d
+				}
+			}
+
+			if data != nil {
+				data.key = key
+				heap.Push(unlockHeap, *data)
+			}
+		}
+	}
+
+	//TODO: берем элементы из unlockHeap и посылаем сигнал в канал, если ключи свободны.
+	//Если ключи не свободны, то нужно вернуть элемент в l.chMap
+
+	<-l.muCh
 }
 
 type LockData struct {
 	keys   []string
 	waitCh chan struct{}
+	//Используется только в unlockKeys()
+	key any
 }
 
 type LockDataHeap []LockData
