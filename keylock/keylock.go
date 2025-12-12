@@ -2,36 +2,47 @@
 
 package keylock
 
-import "container/heap"
+import (
+	"container/list"
+	"fmt"
+)
 
 type KeyLock struct {
-	chMap map[string]*LockDataHeap
-	//Мютекс для работы с chMap
-	muCh chan struct{}
-	//Заблокированные ключи
 	lockedKeys map[string]struct{}
+	freeKeys   map[string]struct{}
+	//Ключ в map - один из входных ключей при вызове LockKeys(), value - list *MissingData
+	keyMap map[string]list.List
+	//Ключ в map - строка, являющаяся конкатинацией недостающих ключей для разблокировки по waitCh
+	//value - list *LockData
+	missingKeyMap map[string]list.List
+	//Мютекс для работы с lockedKeys
+	lkMu chan struct{}
 }
 
 func New() *KeyLock {
 	kl := &KeyLock{
-		chMap:      make(map[string]*LockDataHeap),
-		muCh:       make(chan struct{}, 1),
-		lockedKeys: make(map[string]struct{}),
+		lockedKeys:    make(map[string]struct{}),
+		freeKeys:      make(map[string]struct{}),
+		keyMap:        make(map[string]list.List),
+		missingKeyMap: make(map[string]list.List),
+		lkMu:          make(chan struct{}, 1),
 	}
 
 	return kl
 }
 
 func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool, unlock func()) {
+	l.lkMu <- struct{}{}
+
+	//Проверяем заблокирован ли вызов
 	isLocked := false
 
 	n := len(keys)
 
-	l.muCh <- struct{}{}
-
-	//Проверяем, заблокированы ли уже ключи
 	for i := 0; i < n && !isLocked; i++ {
-		_, ok := l.lockedKeys[keys[i]]
+		key := keys[i]
+
+		_, ok := l.lockedKeys[key]
 
 		if ok {
 			isLocked = true
@@ -39,122 +50,53 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 	}
 
 	if isLocked {
+		missingKeys := list.New()
+
+		for i := 0; i < n; i++ {
+			key := keys[i]
+
+			_, ok := l.lockedKeys[key]
+
+			if ok {
+				//TODO: добавить missingKey в missingKeys, так чтобы сохранялась сортировка
+			}
+		}
+
+		<-l.lkMu
+
 		waitCh := make(chan struct{})
 
-		data := LockData{keys: keys, waitCh: waitCh}
+		lockData := LockData{keys, waitCh}
 
-		for _, key := range keys {
-			h, ok := l.chMap[key]
-
-			if !ok {
-				h = &LockDataHeap{}
-
-				l.chMap[key] = h
-			}
-
-			heap.Push(h, data)
-		}
-
-		<-l.muCh
-
-		select {
-		case <-waitCh:
-			unlock = func() {
-				l.unlockKeys(keys)
-			}
-		case <-cancel:
-			canceled = true
-			unlock = func() {}
-		}
-		close(waitCh)
-
+		//Если нет блокировки, то просто пополняем множество lockedKeys
 	} else {
-		for _, key := range keys {
+		for i := 0; i < n; i++ {
+			key := keys[i]
 			l.lockedKeys[key] = struct{}{}
 		}
 
-		<-l.muCh
+		<-l.lkMu
 
+		canceled = false
 		unlock = func() {
 			l.unlockKeys(keys)
 		}
 	}
-
 	return
 }
 
 func (l *KeyLock) unlockKeys(keys []string) {
-	l.muCh <- struct{}{}
 
-	for _, key := range keys {
-		delete(l.lockedKeys, key)
-	}
-
-	//Нужен для поиска каналов, через которые возможно можно разблокировать горутины
-	unlockHeap := &LockDataHeap{}
-
-	for _, key := range keys {
-		h, ok := l.chMap[key]
-
-		if ok {
-			var data *LockData
-
-			//TODO: подумать над этим циклом, вроде бы нужно брать
-			//не первый элемент из кучи, а элемент с меньшим набором ключей, которые все свободны
-
-			for data == nil && h.Len() > 0 {
-				d := heap.Pop(h).(LockData)
-
-				select {
-				//Если канал закрыт, то берем следующий элемент из кучи
-				case <-d.waitCh:
-				default:
-					data = &d
-				}
-			}
-
-			if data != nil {
-				data.key = key
-				heap.Push(unlockHeap, *data)
-			}
-		}
-	}
-
-	//TODO: берем элементы из unlockHeap и посылаем сигнал в канал, если ключи свободны.
-	//Если ключи не свободны, то нужно вернуть элемент в l.chMap
-
-	<-l.muCh
 }
 
+type MissingData struct {
+	//Отсортированные ключи
+	missingKeys []string
+	lockData    *LockData
+}
+
+// Идентифицирует вызов LockKeys
 type LockData struct {
 	keys   []string
 	waitCh chan struct{}
-	//Используется только в unlockKeys()
-	key any
-}
-
-type LockDataHeap []LockData
-
-func (h LockDataHeap) Len() int {
-	return len(h)
-}
-
-func (h LockDataHeap) Less(i, j int) bool {
-	return len(h[i].keys) < len(h[j].keys)
-}
-
-func (h LockDataHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *LockDataHeap) Push(x any) {
-	*h = append(*h, x.(LockData))
-}
-
-func (h *LockDataHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
 }
