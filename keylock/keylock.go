@@ -5,6 +5,7 @@ package keylock
 import (
 	"container/list"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -82,7 +83,18 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 			return false
 		})
 
-		//TODO: пополнение missingKeyMap
+		//Добавляем в missingKeyMap
+		keyForMissingMap := receiveKeyForMissingMap(missingData)
+
+		li, ok := l.missingKeyMap[keyForMissingMap]
+
+		if !ok {
+			li = list.New()
+		}
+
+		li.PushBack(lockData)
+
+		l.missingKeyMap[keyForMissingMap] = li
 
 		<-l.lkMu
 
@@ -115,7 +127,19 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 func (l *KeyLock) unlockKeys(keys []string) {
 	l.lkMu <- struct{}{}
 
-	//TODO: доделать unlockKeys
+	//Сортировка ключей
+	sort.Strings(keys)
+
+	//По unlockKeys перебираем ключи в MissingKeyMap
+	//Для перебора используем слайс, использованный ключ не удаляем из слайса,
+	//а добавляем его индекс в множество usedKeyIndex и уменьшаем n
+	usedKeyIndex := make(map[int]struct{})
+	n := len(keys)
+
+	//TODO: доделать перебор освободивщихся ключей
+	for i := 1; i <= n; i++ {
+
+	}
 
 	<-l.lkMu
 }
