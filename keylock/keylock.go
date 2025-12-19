@@ -134,14 +134,28 @@ func (l *KeyLock) unlockKeys(keys []string) {
 	//Для перебора используем слайс, использованный ключ не удаляем из слайса,
 	//а добавляем его индекс в множество usedKeyIndex и уменьшаем n
 	usedKeyIndex := make(map[int]struct{})
-	n := len(keys)
+	length := len(keys)
+	n := length
 
 	//TODO: доделать перебор освободивщихся ключей
-	for i := 1; i <= n; i++ {
+	for i := 0; i < n; i++ {
+		//Множество ключей для i-ой позиции
+		keyIndexSet := make([]int, length)
 
+		for j := range keys {
+			if _, ok := usedKeyIndex[j]; !ok {
+				keyIndexSet = append(keyIndexSet, j)
+			}
+		}
+
+		checkUnlockKeys(usedKeyIndex, keys, n, keyIndexSet)
 	}
 
 	<-l.lkMu
+}
+
+func checkUnlockKeys(usedKeyIndex map[int]struct{}, keys []string, n int, keyIndexSet []int) {
+
 }
 
 func (l *KeyLock) addLockedKeys(keys []string) {
