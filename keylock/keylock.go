@@ -139,23 +139,55 @@ func (l *KeyLock) unlockKeys(keys []string) {
 
 	//TODO: доделать перебор освободивщихся ключей
 	for i := 0; i < n; i++ {
-		//Множество ключей для i-ой позиции
-		keyIndexSet := make([]int, length)
+		//Слайс индексов ключей, по которому будет проверяться ключ в MissingKeyMap
+		keyIndexSlice := make([]int, 0, length)
 
-		for j := range keys {
+		keySlice := make([]string, 0, length)
+
+		//Множество ключей для i-ой позиции
+		keyIndexSet := make([]int, 0, length)
+
+		for j := 0; j < length; j++ {
 			if _, ok := usedKeyIndex[j]; !ok {
 				keyIndexSet = append(keyIndexSet, j)
 			}
 		}
 
-		checkUnlockKeys(usedKeyIndex, keys, n, keyIndexSet)
+		checkUnlockKeys(l, usedKeyIndex, keys, n-1, 0, keyIndexSet, keyIndexSlice, keySlice)
 	}
 
 	<-l.lkMu
 }
 
-func checkUnlockKeys(usedKeyIndex map[int]struct{}, keys []string, n int, keyIndexSet []int) {
+func checkUnlockKeys(l *KeyLock, usedKeyIndex map[int]struct{}, keys []string, n int, pos int, keyIndexSet []int, keyIndexSlice []int, keySlice []string) bool {
+	for i, v := range keyIndexSet {
+		if _, ok := usedKeyIndex[v]; !ok {
+			keySlice = append(keySlice, keys[v])
 
+			if pos == n {
+				keyForMissingMap := strings.Join(keySlice, "")
+
+				if l, ok := l.missingKeyMap[keyForMissingMap]; ok && l.Len() > 0 {
+					//TODO: действия, когда есть ожидающий канал и для него
+					//пришли разблокированные ключи
+
+					return true
+				}
+			} else {
+				keyIndexSet = keyIndexSet[i+1:]
+
+				keyIndexSlice = append(keyIndexSlice, v)
+
+				check := checkUnlockKeys(l, usedKeyIndex, keys, n, pos+1, keyIndexSet, keyIndexSlice, keySlice)
+
+				if check && pos != 0 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func (l *KeyLock) addLockedKeys(keys []string) {
