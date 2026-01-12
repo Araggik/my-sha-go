@@ -5,29 +5,21 @@ package keylock
 import (
 	"container/list"
 	"fmt"
-	"sort"
-	"strings"
 )
 
 type KeyLock struct {
 	lockedKeys map[string]struct{}
-	freeKeys   map[string]struct{}
-	//Ключ в map - один из входных ключей при вызове LockKeys(), value - list *MissingData
+	//Ключ в map - один из входных ключей при вызове LockKeys(), value - list *LockData
 	keyMap map[string]*list.List
-	//Ключ в map - строка, являющаяся конкатинацией недостающих ключей для разблокировки по waitCh
-	//value - list *LockData
-	missingKeyMap map[string]*list.List
 	//Мютекс для работы с lockedKeys
 	lkMu chan struct{}
 }
 
 func New() *KeyLock {
 	kl := &KeyLock{
-		lockedKeys:    make(map[string]struct{}),
-		freeKeys:      make(map[string]struct{}),
-		keyMap:        make(map[string]*list.List),
-		missingKeyMap: make(map[string]*list.List),
-		lkMu:          make(chan struct{}, 1),
+		lockedKeys: make(map[string]struct{}),
+		keyMap:     make(map[string]*list.List),
+		lkMu:       make(chan struct{}, 1),
 	}
 
 	return kl
@@ -50,23 +42,9 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 	})
 
 	if isLocked {
-		missingKeys := list.New()
-
-		forEachKey(keys, func(key string) bool {
-			_, ok := l.lockedKeys[key]
-
-			if ok {
-				insertWithSort(missingKeys, key)
-			}
-
-			return false
-		})
-
 		waitCh := make(chan struct{})
 
-		lockData := &LockData{keys, waitCh}
-
-		missingData := &MissingData{missingKeys, lockData}
+		ld := &LockData{keys, waitCh}
 
 		//Пополнение keyMap
 		forEachKey(keys, func(key string) bool {
@@ -76,46 +54,34 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 				li = list.New()
 			}
 
-			li.PushBack(missingData)
+			li.PushBack(ld)
 
 			l.keyMap[key] = li
 
 			return false
 		})
 
-		//Добавляем в missingKeyMap
-		keyForMissingMap := receiveKeyForMissingMap(missingData)
-
-		li, ok := l.missingKeyMap[keyForMissingMap]
-
-		if !ok {
-			li = list.New()
-		}
-
-		li.PushBack(lockData)
-
-		l.missingKeyMap[keyForMissingMap] = li
-
 		<-l.lkMu
 
-		//Ожидание из каналов
 		select {
+		case <-cancel:
+			canceled = true
+			unlock = func() {}
 		case <-waitCh:
 			canceled = false
 			unlock = func() {
 				l.unlockKeys(keys)
 			}
-		case <-cancel:
-			canceled = true
-			unlock = func() {}
 		}
-
-		//Если нет блокировки, то просто пополняем множество lockedKeys
 	} else {
-		l.addLockedKeys(keys)
+		//Пополняем lockedKeys
+		forEachKey(keys, func(key string) bool {
+			l.lockedKeys[key] = struct{}{}
+
+			return false
+		})
 
 		<-l.lkMu
-
 		canceled = false
 		unlock = func() {
 			l.unlockKeys(keys)
@@ -127,139 +93,96 @@ func (l *KeyLock) LockKeys(keys []string, cancel <-chan struct{}) (canceled bool
 func (l *KeyLock) unlockKeys(keys []string) {
 	l.lkMu <- struct{}{}
 
-	//Сортировка ключей
-	sort.Strings(keys)
+	//Удаляем из lockedKeys
+	forEachKey(keys, func(key string) bool {
+		delete(l.lockedKeys, key)
 
-	//По unlockKeys перебираем ключи в MissingKeyMap
-	//Для перебора используем слайс, использованный ключ не удаляем из слайса,
-	//а добавляем его индекс в множество usedKeyIndex и уменьшаем n
-	usedKeyIndex := make(map[int]struct{})
-	length := len(keys)
-	n := length
+		return false
+	})
 
-	//TODO: доделать перебор освободивщихся ключей
-	for i := 0; i < n; i++ {
-		//Слайс индексов ключей, по которому будет проверяться ключ в MissingKeyMap
-		keyIndexSlice := make([]int, 0, length)
+	ldQueue := list.New()
 
-		keySlice := make([]string, 0, length)
-
-		//Множество ключей для i-ой позиции
-		keyIndexSet := make([]int, 0, length)
-
-		for j := 0; j < length; j++ {
-			if _, ok := usedKeyIndex[j]; !ok {
-				keyIndexSet = append(keyIndexSet, j)
-			}
-		}
-
-		checkUnlockKeys(l, usedKeyIndex, keys, n-1, 0, keyIndexSet, keyIndexSlice, keySlice)
-	}
-
-	<-l.lkMu
-}
-
-func checkUnlockKeys(l *KeyLock, usedKeyIndex map[int]struct{}, keys []string, n int, pos int, keyIndexSet []int, keyIndexSlice []int, keySlice []string) bool {
-	for i, v := range keyIndexSet {
-		if _, ok := usedKeyIndex[v]; !ok {
-			keySlice = append(keySlice, keys[v])
-
-			if pos == n {
-				keyForMissingMap := strings.Join(keySlice, "")
-
-				if l, ok := l.missingKeyMap[keyForMissingMap]; ok && l.Len() > 0 {
-					//TODO: действия, когда есть ожидающий канал и для него
-					//пришли разблокированные ключи
-
-					return true
-				}
-			} else {
-				keyIndexSet = keyIndexSet[i+1:]
-
-				keyIndexSlice = append(keyIndexSlice, v)
-
-				check := checkUnlockKeys(l, usedKeyIndex, keys, n, pos+1, keyIndexSet, keyIndexSlice, keySlice)
-
-				if check && pos != 0 {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-func (l *KeyLock) addLockedKeys(keys []string) {
-	//value - ключ для missingKeyMap
-	missingDataSet := make(map[*MissingData]string)
+	//Для быстрой проверки, что LockData уже есть в ldQuery
+	ldMap := make(map[*LockData]struct{})
 
 	forEachKey(keys, func(key string) bool {
-		//Добавляем в lockedKeys
-		l.lockedKeys[key] = struct{}{}
-
-		li, ok := l.keyMap[key]
-
-		if ok {
+		if li, ok := l.keyMap[key]; ok {
 			for el := li.Front(); el != nil; el = el.Next() {
-				missingData := el.Value.(*MissingData)
+				val := el.Value.(*LockData)
 
-				_, ok = missingDataSet[missingData]
+				if _, ok := ldMap[val]; !ok {
+					//Проверяем, свободны ли ключи в LockData
+					isLocked := false
 
-				//Запоминаем ключ для missingKeyMap, чтобы потом удалить lockData
-				//по этому ключу
-				if !ok {
-					keyForMissingMap := receiveKeyForMissingMap(missingData)
+					forEachKey(val.keys, func(k string) bool {
+						_, ok := l.lockedKeys[k]
 
-					missingDataSet[missingData] = keyForMissingMap
+						if ok {
+							isLocked = true
+						}
+
+						return isLocked
+					})
+
+					if !isLocked {
+						//Добавление в ldMap
+						ldMap[val] = struct{}{}
+
+						//Добавление в ldQueue
+						length := len(val.keys)
+
+						isLast := true
+
+						for elem := ldQueue.Front(); elem != nil; elem = elem.Next() {
+							v := elem.Value.(*LockData)
+
+							n := len(v.keys)
+
+							if length >= n {
+								li.InsertBefore(val, elem)
+
+								isLast = false
+
+								break
+							}
+						}
+
+						if isLast {
+							li.PushBack(val)
+						}
+					}
 				}
 
-				//Пополняем список недостающих ключей в MissingData
-				insertWithSort(missingData.missingKeys, key)
 			}
 		}
 
 		return false
 	})
 
-	//Корректируем missingKeyMap
-	for md, oldKey := range missingDataSet {
-		//Добавляем в missingKeyMap
-		keyForMissingMap := receiveKeyForMissingMap(md)
+	//TODO: освобождение LockData по ldQueue, добавление в lockedKeys, удаление из keyMap
 
-		li, ok := l.missingKeyMap[keyForMissingMap]
+	<-l.lkMu
+}
 
-		if !ok {
-			li = list.New()
-		}
+// Удаление LockData из keyMap
+func (l *KeyLock) removeLockData(ld *LockData) {
+	keys := ld.keys
 
-		li.PushBack(md.lockData)
-
-		l.missingKeyMap[keyForMissingMap] = li
-
-		//Удаляем из missingKeyMap
-		li = l.missingKeyMap[oldKey]
+	forEachKey(keys, func(key string) bool {
+		li := l.keyMap[key]
 
 		for el := li.Front(); el != nil; el = el.Next() {
-			ld := el.Value.(*LockData)
+			val := el.Value.(*LockData)
 
-			if md.lockData == ld {
+			if val == ld {
 				li.Remove(el)
 
 				break
 			}
 		}
-	}
-}
 
-func receiveKeyForMissingMap(md *MissingData) string {
-	var builder strings.Builder
-
-	for el := md.missingKeys.Front(); el != nil; el = el.Next() {
-		builder.WriteString(el.Value.(string))
-	}
-
-	return builder.String()
+		return false
+	})
 }
 
 func forEachKey(keys []string, fn func(key string) bool) {
@@ -274,34 +197,6 @@ func forEachKey(keys []string, fn func(key string) bool) {
 			break
 		}
 	}
-}
-
-// Вставляем строку в отсортированный список
-func insertWithSort(l *list.List, value string) {
-	el := l.Front()
-
-	//Если пустой список
-	if el == nil {
-		l.PushBack(value)
-
-		return
-	}
-
-	for ; el != nil; el = el.Next() {
-		val := el.Value.(string)
-
-		if value < val {
-			l.InsertAfter(value, el)
-
-			break
-		}
-	}
-}
-
-type MissingData struct {
-	//Отсортированные ключи
-	missingKeys *list.List
-	lockData    *LockData
 }
 
 // Идентифицирует вызов LockKeys
