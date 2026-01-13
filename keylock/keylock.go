@@ -4,7 +4,6 @@ package keylock
 
 import (
 	"container/list"
-	"fmt"
 )
 
 type KeyLock struct {
@@ -102,7 +101,7 @@ func (l *KeyLock) unlockKeys(keys []string) {
 
 	ldQueue := list.New()
 
-	//Для быстрой проверки, что LockData уже есть в ldQuery
+	//Для быстрой проверки, что LockData уже есть в ldQueue
 	ldMap := make(map[*LockData]struct{})
 
 	forEachKey(keys, func(key string) bool {
@@ -159,7 +158,35 @@ func (l *KeyLock) unlockKeys(keys []string) {
 		return false
 	})
 
-	//TODO: освобождение LockData по ldQueue, добавление в lockedKeys, удаление из keyMap
+	for el := ldQueue.Front(); el != nil; el = el.Next() {
+		val := el.Value.(*LockData)
+
+		isLocked := false
+
+		forEachKey(val.keys, func(k string) bool {
+			_, ok := l.lockedKeys[k]
+
+			if ok {
+				isLocked = true
+			}
+
+			return isLocked
+		})
+
+		if !isLocked {
+			//Разблокирование потока
+			val.waitCh <- struct{}{}
+
+			//Блокировка ключей
+			forEachKey(val.keys, func(key string) bool {
+				l.lockedKeys[key] = struct{}{}
+
+				return false
+			})
+
+			l.removeLockData(val)
+		}
+	}
 
 	<-l.lkMu
 }
